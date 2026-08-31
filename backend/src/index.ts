@@ -5,6 +5,8 @@ import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 
+import * as Sentry from "@sentry/node";
+
 import { clerkMiddleware } from '@clerk/express';
 import { clerkWebhookHandler } from "./webhooks/clerk";
 import {getEnv } from "./lib/env";
@@ -13,6 +15,7 @@ import meRouter from "./routes/meRouter";
 import productRouter from "./routes/productRouter";
 import streamRouter from "./routes/streamRouter";
 import checkoutRouter from "./routes/checkoutRouter";
+import { sentryClerkUserMiddleware } from "./middleware/sentryClerkUser";
 
 const env = getEnv();
 const app = express();
@@ -28,6 +31,7 @@ app.post("/webhooks/clerk", rawJson, (req, res) => {
 app.use(express.json())
 app.use(cors())
 app.use(clerkMiddleware())
+app.use(sentryClerkUserMiddleware);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -57,7 +61,19 @@ if (fs.existsSync(publicDir)) {
   });
 }
 
-// to do: add error handler middleware
+// sentry will be attached to the response object
+Sentry.setupExpressErrorHandler(app);
+
+app.use(
+  (_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const sentryId = (res as express.Response & { sentry?: string }).sentry;
+
+    res.status(500).json({
+      error: "Internal server error",
+      ...(sentryId !== undefined && { sentryId }),
+    });
+  },
+);
 
 app.listen(env.PORT, () => {
   console.log("Listening on port:", env.PORT);
